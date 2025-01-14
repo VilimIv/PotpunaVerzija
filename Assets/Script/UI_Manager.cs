@@ -1,5 +1,3 @@
-using System.Collections;
-using System.Collections.Generic;
 using TMPro;
 using Unity.Netcode;
 using UnityEngine;
@@ -30,26 +28,20 @@ public class UI_Manager : NetworkBehaviour
     {
         startHostButton.onClick.AddListener(() => 
         {
-            if(NetworkManager.Singleton.StartHost())
-            {
+            if(NetworkManager.Singleton.StartHost()){
                 Debug.Log("Host started...");
             }
-            else
-            {
-
+            else{
                 Debug.Log("Host could not be started.");
             }
         });
 
         startClientButton.onClick.AddListener(() =>
         {
-            if (NetworkManager.Singleton.StartClient())
-            {
+            if (NetworkManager.Singleton.StartClient()){
                 Debug.Log("Client started...");
             }
-            else
-            {
-
+            else{
                 Debug.Log("Client could not be started.");
             }
         });

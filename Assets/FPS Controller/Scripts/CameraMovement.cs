@@ -33,10 +33,9 @@ public class CameraMovement : NetworkBehaviour
     }
 
     void Update()
-    {
+    {        
         // Only execute for the local player
-        if (!IsLocalPlayer)
-        {
+        if (!IsLocalPlayer){
             return;
         }
 

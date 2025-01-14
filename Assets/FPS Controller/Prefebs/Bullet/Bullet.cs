@@ -19,7 +19,9 @@ public class Bullet : NetworkBehaviour
         RB = GetComponent<Rigidbody>();
         if (FireSound != null)
         {
-            AudioSource.PlayClipAtPoint(FireSound, transform.position);
+            // TODO: Multiply with SfxVolume
+            // TODO: Cap volume to 1
+            AudioSource.PlayClipAtPoint(FireSound, transform.position, 1.0f * SettingsManager.MasterVolume);
         }
     }
 
