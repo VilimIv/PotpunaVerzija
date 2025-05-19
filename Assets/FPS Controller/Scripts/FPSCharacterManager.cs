@@ -5,6 +5,7 @@ using System.Diagnostics;
 using TMPro;
 using Unity.Netcode;
 using UnityEngine;
+using Debug = System.Diagnostics.Debug;
 
 public class FPSCharacterManager : NetworkBehaviour
 {
@@ -17,6 +18,11 @@ public class FPSCharacterManager : NetworkBehaviour
     [HideInInspector] public bool CanFire;
     [HideInInspector] public bool CanSwitch;
 
+    public NetworkList<WeaponData> WeaponsData;
+    private WeaponData CurrentWeaponData => WeaponsData[CurruntWeapon.Value];
+    private float nextHashCheckTime;
+    private const float HashCheckInterval = 1f;
+
     float DefaultFOV;
 
     void Awake()
@@ -24,6 +30,8 @@ public class FPSCharacterManager : NetworkBehaviour
         CanFire = true;
         CanSwitch = true;
         DefaultFOV = Refrences.PlayerCamera.gameObject.GetComponent<Camera>().fieldOfView;
+        WeaponsData = new NetworkList<WeaponData>();
+
         UpdateEliminations(0, 0);
     }
     private void LateUpdate()
@@ -31,13 +39,38 @@ public class FPSCharacterManager : NetworkBehaviour
         Refrences.WeaponRootPose.LookAt(Refrences.TargetPos);
         Refrences.WeaponRootPose.localEulerAngles = new Vector3(0, Refrences.WeaponRootPose.eulerAngles.x, 0);
         Refrences.WeaponRootObjcts.LookAt(Refrences.TargetPos);
-
     }
 
     public override void OnNetworkSpawn()
     {
-        CurruntWeapon.OnValueChanged += WeaponValueChaged;
-        Eliminations.OnValueChanged += UpdateEliminations;
+        if (IsServer)
+        {
+            foreach (var weapon in Weapons)
+            {
+                WeaponsData.Add(new WeaponData { AmmoCapacity = weapon.AmmoCapacity, CurruntMagAmmo = weapon.MagCapacity, MagCapacity = weapon.MagCapacity});
+            }
+        }
+        
+        if (IsClient)
+        {
+            WeaponsData.OnListChanged += WeaponsDataOnOnListChanged;
+            CurruntWeapon.OnValueChanged += WeaponValueChaged;
+            Eliminations.OnValueChanged += UpdateEliminations;
+        }
+    }
+
+    private void WeaponsDataOnOnListChanged(NetworkListEvent<WeaponData> changeEvent)
+    {
+        if (changeEvent.Index == CurruntWeapon.Value) UpdateAmmo();
+    }
+
+    public override void OnNetworkDespawn()
+    {
+        if (IsServer) return;
+        
+        CurruntWeapon.OnValueChanged -= WeaponValueChaged;
+        Eliminations.OnValueChanged -= UpdateEliminations;
+        WeaponsData.OnListChanged -= WeaponsDataOnOnListChanged;
     }
 
     void UpdateEliminations(int OldValue, int NewValue)
@@ -60,11 +93,10 @@ public class FPSCharacterManager : NetworkBehaviour
             return;
 
         Cursor.lockState = CursorLockMode.Locked;
-        FillAmmo();
         GrabWeapon(0);
         CurruntWeapon.Value = 0;
         UpdateThrowAblesAmmo();
-        UpdateAmmo();
+        // UpdateAmmo();
     }
     public void WeaponValueChaged(int OldValue, int NewValue)
     {
@@ -80,13 +112,7 @@ public class FPSCharacterManager : NetworkBehaviour
         UpdateAmmo();
         CanFire = true;
     }
-    void FillAmmo()
-    {
-        foreach(GunDetails weapon in Weapons)
-        {
-            weapon.CurruntMagAmmo = weapon.MagCapacity;
-        }
-    }
+    
     void Update()
     {
         if (!GetComponent<NetworkObject>().IsOwner || GameManager.MatchEnded)
@@ -100,7 +126,31 @@ public class FPSCharacterManager : NetworkBehaviour
         {
             Refrences.CharcaterAniamtor.transform.localPosition = Vector3.zero;
         }
+
+        if (IsOwner && Time.time > nextHashCheckTime)
+        {
+            nextHashCheckTime = Time.time + HashCheckInterval;
+            CompareHashServerRpc(ComputePlayerDataHash());
+        }
     }
+
+    [ServerRpc]
+    private void CompareHashServerRpc(ForceNetworkSerializeByMemcpy<Hash128> clientHash, ServerRpcParams serverRpcParams = default)
+    {
+        var serverHash = ComputePlayerDataHash();
+
+        if (clientHash.Value != serverHash)
+        {
+            UnityEngine.Debug.LogWarning($"Hash check failed for player {serverRpcParams.Receive.SenderClientId}");
+        }
+    }
+
+    private Hash128 ComputePlayerDataHash()
+    {
+        var d = new PlayerData { CurrentWeaponData = this.CurrentWeaponData, Eliminations = this.Eliminations.Value};
+        return Hash128.Compute(ref d);
+    }
+
 
     #region Throables Input Checks
     static GameObject ToThrough;
@@ -272,7 +322,7 @@ public class FPSCharacterManager : NetworkBehaviour
         if (!CanFire)
             return;
 
-        if (Input.GetMouseButtonDown(0) && Weapons[CurruntWeapon.Value].CurruntMagAmmo > 0)
+        if (Input.GetMouseButtonDown(0) && WeaponsData[CurruntWeapon.Value].CurruntMagAmmo > 0)
         {
             Refrences.CharcaterAniamtor.SetBool("Shoot_b", true);
             Refrences.WeaponsAnimator.SetBool("Shoot_b", true);
@@ -281,7 +331,7 @@ public class FPSCharacterManager : NetworkBehaviour
                 Refrences.CharcaterAniamtor.SetBool("FullAuto_b", true);
                 Refrences.WeaponsAnimator.SetBool("FullAuto_b", true);
             }
-            if(Weapons[CurruntWeapon.Value].CurruntMagAmmo > 0)
+            if(WeaponsData[CurruntWeapon.Value].CurruntMagAmmo > 0)
             {
                 Shoot();
                 if(Weapons[CurruntWeapon.Value].Type == GunType.Single)
@@ -317,7 +367,7 @@ public class FPSCharacterManager : NetworkBehaviour
         {
             if (Weapons[CurruntWeapon.Value].Type == GunType.Auto)
             {
-                if (Weapons[CurruntWeapon.Value].CurruntMagAmmo > 0)
+                if (CurrentWeaponData.CurruntMagAmmo > 0)
                 {
                     ShootTimer += Time.deltaTime;
                     if (ShootTimer > Weapons[CurruntWeapon.Value].firerate)
@@ -326,7 +376,7 @@ public class FPSCharacterManager : NetworkBehaviour
                         ShootTimer = 0;
                     }
                 }
-                else if (Weapons[CurruntWeapon.Value].AmmoCapacity > 0)
+                else if (CurrentWeaponData.AmmoCapacity > 0)
                 {
                     StartReload();
                 }
@@ -348,7 +398,7 @@ public class FPSCharacterManager : NetworkBehaviour
 
         if (Input.GetKeyDown(KeyCode.R))
         {
-            if (Weapons[CurruntWeapon.Value].AmmoCapacity > 0)
+            if (CurrentWeaponData.AmmoCapacity > 0)
             {
                 StartReload();
             }
@@ -360,13 +410,34 @@ public class FPSCharacterManager : NetworkBehaviour
     GameObject Bullet;
     void Shoot()
     {
-        Weapons[CurruntWeapon.Value].CurruntMagAmmo--;
+        // Weapons[CurruntWeapon.Value].CurruntMagAmmo--;
+        TryUseAmmo(CurrentWeaponData.CurruntMagAmmo - 1);;
         if(Weapons[CurruntWeapon.Value].Bullet != null && Weapons[CurruntWeapon.Value].ShootPoint != null)
         {
             SpawnBulletServerRpc(Weapons[CurruntWeapon.Value].ShootPoint.position, Weapons[CurruntWeapon.Value].ShootPoint.rotation);
         }
 
-        UpdateAmmo();
+        // UpdateAmmo();
+    }
+
+    [ServerRpc]
+    private void RequestUseAmmoServerRpc()
+    {
+        UpdateServerVariableAmmo(CurrentWeaponData.CurruntMagAmmo - 1);;
+    }
+
+    private void UpdateServerVariableAmmo(int newAmmo)
+    {
+        if(!IsServer) return;
+        var gunData = CurrentWeaponData;
+        gunData.CurruntMagAmmo = newAmmo;
+        WeaponsData[CurruntWeapon.Value] = gunData;
+    }
+
+    private void TryUseAmmo(int newAmmo)
+    {
+        if (IsClient) RequestUseAmmoServerRpc();
+        else if (IsServer) UpdateServerVariableAmmo(newAmmo);
     }
     void StartReload()
     {
@@ -377,24 +448,55 @@ public class FPSCharacterManager : NetworkBehaviour
         Refrences.CharcaterAniamtor.SetBool("Reload_b", true);
         Refrences.WeaponsAnimator.SetBool("Reload_b", true);
     }
+
+    private void TryReload()
+    {
+        if (IsClient)
+        {
+            RequestReloadServerRpc();
+        } else if (IsServer)
+        {
+            UpdateServerVariableReload();
+        }
+        
+    }
+
+    [ServerRpc]
+    private void RequestReloadServerRpc() => UpdateServerVariableReload();
+
+    private void UpdateServerVariableReload()
+    {
+        if (IsServer is false) return;
+        
+        int missingAmmo = CurrentWeaponData.MagCapacity - CurrentWeaponData.CurruntMagAmmo;
+        if (CurrentWeaponData.AmmoCapacity >= missingAmmo)
+        {
+            var modified = CurrentWeaponData;
+            modified.AmmoCapacity -= missingAmmo;
+            modified.CurruntMagAmmo = modified.MagCapacity;
+            WeaponsData[CurruntWeapon.Value] = modified;
+            // Weapons[CurruntWeapon.Value].CurruntMagAmmo = Weapons[CurruntWeapon.Value].MagCapacity;
+            // Weapons[CurruntWeapon.Value].AmmoCapacity -= missingAmmo;
+        }
+        else if (CurrentWeaponData.AmmoCapacity > 0)
+        {
+            var weapon = WeaponsData[CurruntWeapon.Value];
+            weapon.CurruntMagAmmo += weapon.AmmoCapacity;
+            weapon.AmmoCapacity = 0;
+            WeaponsData[CurruntWeapon.Value] = weapon;
+            // Weapons[CurruntWeapon.Value].CurruntMagAmmo += Weapons[CurruntWeapon.Value].AmmoCapacity;
+            // Weapons[CurruntWeapon.Value].AmmoCapacity = 0;
+        }
+    }
+    
     public void Reload()
     {
-        int missingAmmo = Weapons[CurruntWeapon.Value].MagCapacity - Weapons[CurruntWeapon.Value].CurruntMagAmmo;
-        if (Weapons[CurruntWeapon.Value].AmmoCapacity >= missingAmmo)
-        {
-            Weapons[CurruntWeapon.Value].CurruntMagAmmo = Weapons[CurruntWeapon.Value].MagCapacity;
-            Weapons[CurruntWeapon.Value].AmmoCapacity -= missingAmmo;
-        }
-        else if (Weapons[CurruntWeapon.Value].AmmoCapacity > 0)
-        {
-            Weapons[CurruntWeapon.Value].CurruntMagAmmo += Weapons[CurruntWeapon.Value].AmmoCapacity;
-            Weapons[CurruntWeapon.Value].AmmoCapacity = 0;
-        }
-        UpdateAmmo();
+        TryReload();
+        // UpdateAmmo();
         Refrences.CharcaterAniamtor.SetBool("Reload_b", false);
         Refrences.WeaponsAnimator.SetBool("Reload_b", false);
 
-        if (Input.GetMouseButton(0) && Weapons[CurruntWeapon.Value].CurruntMagAmmo > 0)
+        if (Input.GetMouseButton(0) && CurrentWeaponData.CurruntMagAmmo > 0)
         {
             Refrences.CharcaterAniamtor.SetBool("Shoot_b", true);
             Refrences.CharcaterAniamtor.SetBool("FullAuto_b", true);
@@ -409,7 +511,7 @@ public class FPSCharacterManager : NetworkBehaviour
     {
         if(Refrences.AmmoText != null)
         {
-            Refrences.AmmoText.text = Weapons[CurruntWeapon.Value].CurruntMagAmmo.ToString() + "/" + Weapons[CurruntWeapon.Value].AmmoCapacity.ToString();
+            Refrences.AmmoText.text = CurrentWeaponData.CurruntMagAmmo + "/" + CurrentWeaponData.AmmoCapacity;
         }
     }
 
@@ -523,4 +625,40 @@ public class ThrowableDetails
     public int AnimatorType;
     public KeyCode InputKey;
     public TextMeshProUGUI UiText;
+}
+
+public struct WeaponData : INetworkSerializable, IEquatable<WeaponData>
+{
+    public int MagCapacity;
+    public int AmmoCapacity;
+    public int CurruntMagAmmo;
+        
+    public void NetworkSerialize<T>(BufferSerializer<T> serializer) where T : IReaderWriter
+    {
+        if (serializer.IsReader)
+        {
+            var reader = serializer.GetFastBufferReader();
+            reader.ReadValueSafe(out MagCapacity);
+            reader.ReadValueSafe(out AmmoCapacity);
+            reader.ReadValueSafe(out CurruntMagAmmo);
+        } else if (serializer.IsWriter)
+        {
+            var writer = serializer.GetFastBufferWriter();
+            writer.WriteValueSafe(MagCapacity);
+            writer.WriteValueSafe(AmmoCapacity);
+            writer.WriteValueSafe(CurruntMagAmmo);
+        }
+    }
+
+    public bool Equals(WeaponData other)
+    {
+        return MagCapacity == other.MagCapacity && AmmoCapacity == other.AmmoCapacity && CurruntMagAmmo == other.CurruntMagAmmo;
+    }
+}
+
+// data used for computing the hash
+public struct PlayerData
+{
+    public WeaponData CurrentWeaponData;
+    public int Eliminations;
 }
