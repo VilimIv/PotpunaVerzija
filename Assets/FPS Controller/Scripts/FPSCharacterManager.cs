@@ -8,6 +8,7 @@ using UnityEngine;
 
 public class FPSCharacterManager : NetworkBehaviour
 {
+    private const int Key = 0xA5A5A5A5;
     public List<GunDetails> Weapons;
     public List<ThrowableDetails> Throwables;
     public OtherRefs Refrences;
@@ -18,6 +19,16 @@ public class FPSCharacterManager : NetworkBehaviour
     [HideInInspector] public bool CanSwitch;
 
     float DefaultFOV;
+
+    public static int EncryptInt(int value)
+    {
+        return value ^ Key;
+    }
+
+    public static int DecryptInt(int encrypted)
+    {
+        return encrypted ^ Key;
+    }    
 
     void Awake()
     {
@@ -42,7 +53,8 @@ public class FPSCharacterManager : NetworkBehaviour
 
     void UpdateEliminations(int OldValue, int NewValue)
     {
-        Refrences.KillsText.text = "<color=yellow>Eliminations : </color>" + Eliminations.Value.ToString();
+        int kills = RuntimeCrypto.DecryptInt(Eliminations.Value);
+        Refrences.KillsText.text = "<color=yellow>Eliminations : </color>" + kills.ToString();
     }
 
     public void AddEliminations(int Count)
@@ -50,7 +62,9 @@ public class FPSCharacterManager : NetworkBehaviour
         print(Count + " Elimination has been added");
         if (IsServer)
         {
-            Eliminations.Value += Count;
+            int current = RuntimeCrypto.DecryptInt(Eliminations.Value);
+            current += Count;
+            Eliminations.Value = RuntimeCrypto.EncryptInt(current);
         }
     }
 
@@ -84,7 +98,7 @@ public class FPSCharacterManager : NetworkBehaviour
     {
         foreach(GunDetails weapon in Weapons)
         {
-            weapon.CurruntMagAmmo = weapon.MagCapacity;
+            weapon.CurruntMagAmmo = RuntimeCrypto.EncryptInt(weapon.MagCapacity);
         }
     }
     void Update()
@@ -360,7 +374,10 @@ public class FPSCharacterManager : NetworkBehaviour
     GameObject Bullet;
     void Shoot()
     {
-        Weapons[CurruntWeapon.Value].CurruntMagAmmo--;
+        int dec = RuntimeCrypto.DecryptInt(Weapons[CurruntWeapon.Value].CurruntMagAmmo);
+        dec--;
+        Weapons[CurruntWeapon.Value].CurruntMagAmmo = RuntimeCrypto.EncryptInt(dec);
+
         if(Weapons[CurruntWeapon.Value].Bullet != null && Weapons[CurruntWeapon.Value].ShootPoint != null)
         {
             SpawnBulletServerRpc(Weapons[CurruntWeapon.Value].ShootPoint.position, Weapons[CurruntWeapon.Value].ShootPoint.rotation);
@@ -368,6 +385,7 @@ public class FPSCharacterManager : NetworkBehaviour
 
         UpdateAmmo();
     }
+
     void StartReload()
     {
         Refrences.CharcaterAniamtor.SetBool("Shoot_b", false);
@@ -379,22 +397,27 @@ public class FPSCharacterManager : NetworkBehaviour
     }
     public void Reload()
     {
-        int missingAmmo = Weapons[CurruntWeapon.Value].MagCapacity - Weapons[CurruntWeapon.Value].CurruntMagAmmo;
-        if (Weapons[CurruntWeapon.Value].AmmoCapacity >= missingAmmo)
+        int curr = RuntimeCrypto.DecryptInt(Weapons[CurruntWeapon.Value].CurruntMagAmmo);
+        int cap = Weapons[CurruntWeapon.Value].MagCapacity;
+        int ammoCap = Weapons[CurruntWeapon.Value].AmmoCapacity;
+        int missingAmmo = cap - curr;
+        if (ammoCap >= missingAmmo)
         {
-            Weapons[CurruntWeapon.Value].CurruntMagAmmo = Weapons[CurruntWeapon.Value].MagCapacity;
-            Weapons[CurruntWeapon.Value].AmmoCapacity -= missingAmmo;
+            curr = cap;
+            ammoCap -= missingAmmo;
         }
-        else if (Weapons[CurruntWeapon.Value].AmmoCapacity > 0)
+        else if (ammoCap > 0)
         {
-            Weapons[CurruntWeapon.Value].CurruntMagAmmo += Weapons[CurruntWeapon.Value].AmmoCapacity;
-            Weapons[CurruntWeapon.Value].AmmoCapacity = 0;
+            curr += ammoCap;
+            ammoCap = 0;
         }
+        Weapons[CurruntWeapon.Value].CurruntMagAmmo = RuntimeCrypto.EncryptInt(curr);
+        Weapons[CurruntWeapon.Value].AmmoCapacity = ammoCap;
         UpdateAmmo();
         Refrences.CharcaterAniamtor.SetBool("Reload_b", false);
         Refrences.WeaponsAnimator.SetBool("Reload_b", false);
 
-        if (Input.GetMouseButton(0) && Weapons[CurruntWeapon.Value].CurruntMagAmmo > 0)
+        if (Input.GetMouseButton(0) && curr > 0)
         {
             Refrences.CharcaterAniamtor.SetBool("Shoot_b", true);
             Refrences.CharcaterAniamtor.SetBool("FullAuto_b", true);
@@ -402,6 +425,7 @@ public class FPSCharacterManager : NetworkBehaviour
             Refrences.WeaponsAnimator.SetBool("FullAuto_b", true);
         }
     }
+
     #endregion
 
     #region Ui Update
@@ -409,7 +433,8 @@ public class FPSCharacterManager : NetworkBehaviour
     {
         if(Refrences.AmmoText != null)
         {
-            Refrences.AmmoText.text = Weapons[CurruntWeapon.Value].CurruntMagAmmo.ToString() + "/" + Weapons[CurruntWeapon.Value].AmmoCapacity.ToString();
+            int curr = RuntimeCrypto.DecryptInt(Weapons[CurruntWeapon.Value].CurruntMagAmmo);
+            Refrences.AmmoText.text = curr.ToString() + "/" + Weapons[CurruntWeapon.Value].AmmoCapacity.ToString();
         }
     }
 
